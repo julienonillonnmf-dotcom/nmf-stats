@@ -1,0 +1,10 @@
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+serverAddress = "appstats.nantesmetropolefutsal.fr"
+
+[theme]
+base = "light"
