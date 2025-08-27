@@ -7,4 +7,7 @@ enableXsrfProtection = false
 serverAddress = "appstats.nantesmetropolefutsal.fr"
 
 [theme]
-base = "light"
+primaryColor = "#C09D5A"
+backgroundColor = "#1D2945" 
+secondaryBackgroundColor = "#2A3B5A"
+textColor = "#FFFFFF"
