@@ -16,96 +16,131 @@ else:
 
 st.title("Nantes Métropole Futsal — Suivi des performances")
 
-# ---------------- Robust parser ----------------
-@st.cache_data
-def parse_excel_file(file_path):
-    xl = pd.ExcelFile(file_path)
+# ---------------- Google Sheets parser ----------------
+@st.cache_data(ttl="10m")  # Cache pendant 10 minutes
+def parse_google_sheet():
+    SHEET_ID = "1-QCywSqXboG2k1xLmaX2eRy7MWXzwcKoEPfIHbbEIY8"
+    
     all_records = []
-
     int_re = re.compile(r'(\d+)')
     day_names = {"lundi":1,"mardi":2,"mercredi":3,"jeudi":4,"vendredi":5,"samedi":6,"dimanche":7}
-
-    for sheet in xl.sheet_names:
-        raw = pd.read_excel(file_path, sheet_name=sheet, header=None, dtype=object)
-        nrows, ncols = raw.shape
-
-        # Détection des lignes jour / jeu
-        candidate_day_scores = []
-        for r in range(min(6, nrows)):
-            row_vals = raw.iloc[r, 1:].astype(str).fillna("").str.strip().str.lower().tolist()
-            score = sum(1 for v in row_vals if v in day_names)
-            candidate_day_scores.append((r, score))
-        row_jours = max(candidate_day_scores, key=lambda x: x[1])[0] if candidate_day_scores else 0
-
-        candidate_num_scores = []
-        for r in range(row_jours + 1, min(row_jours + 6, nrows)):
-            row_vals = raw.iloc[r, 1:].astype(str).fillna("").str.strip().tolist()
-            score = sum(1 for v in row_vals if int_re.search(str(v)))
-            candidate_num_scores.append((r, score))
-        row_jeux = max(candidate_num_scores, key=lambda x: x[1])[0] if candidate_num_scores else min(row_jours + 1, nrows-1)
-
-        jours_series = raw.iloc[row_jours].ffill().fillna("Séance inconnue").astype(str).str.strip()
-        jeux_series = raw.iloc[row_jeux].astype(str).fillna("").str.strip()
-
-        # Lecture des joueurs/gardiens
-        for r in range(row_jeux + 1, nrows):
-            joueur_cell = raw.iat[r, 0]  # Colonne A : nom du joueur
-            poste_cell = raw.iat[r, 1]   # Colonne B : poste
+    
+    # Lire toutes les feuilles disponibles avec leurs GIDs
+    sheets = [
+        ("Août", 0),
+        ("Septembre", 1815364140),
+        ("Octobre", 2065545828),
+        ("Novembre", 2055534384),
+        ("Décembre", 2028758753),
+        ("Janvier", 228471660),
+        ("Février", 1003146032),
+        ("Mars", 1342797580),
+        ("Avril", 1812433009),
+        ("Mai", 549449988),
+        ("Juin", 557016746)
+    ]
+    
+    for sheet_name, gid in sheets:
+        try:
+            # URL pour lire une feuille spécifique en CSV avec le bon GID
+            sheet_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={gid}"
             
-            if pd.isna(joueur_cell):
+            # Lire les données depuis Google Sheets
+            raw = pd.read_csv(sheet_url, header=None)
+            
+            if raw.empty:
                 continue
-            
-            joueur_name = str(joueur_cell).strip()
-            poste = str(poste_cell).strip() if not pd.isna(poste_cell) else "Joueur"
-            
-            for c in range(2, ncols):  # Commencer à la colonne C (index 2)
-                raw_val = raw.iat[r, c]
-                if pd.isna(raw_val):
-                    continue
-                    
-                jeu_cell = str(jeux_series.iloc[c]).strip()
-                m = int_re.search(jeu_cell)
-                jeu_num = int(m.group(1)) if m else c-1  # -1 car on commence à la colonne C
-                jour_name = str(jours_series.iloc[c]).strip() if c < len(jours_series) else "Séance inconnue"
-                jour_index = day_names.get(jour_name.lower(), 0)
-                semaine = (jour_index - 1)//7 + 1 if jour_index > 0 else 1
+                
+            nrows, ncols = raw.shape
 
-                if poste.lower() != "gardien":
-                    val_str = str(raw_val).strip().upper()
-                    if val_str not in ("V","D"):
+            # Détection des lignes jour / jeu (même logique qu'avant)
+            candidate_day_scores = []
+            for r in range(min(6, nrows)):
+                row_vals = raw.iloc[r, 1:].astype(str).fillna("").str.strip().str.lower().tolist()
+                score = sum(1 for v in row_vals if v in day_names)
+                candidate_day_scores.append((r, score))
+            row_jours = max(candidate_day_scores, key=lambda x: x[1])[0] if candidate_day_scores else 0
+
+            candidate_num_scores = []
+            for r in range(row_jours + 1, min(row_jours + 6, nrows)):
+                row_vals = raw.iloc[r, 1:].astype(str).fillna("").str.strip().tolist()
+                score = sum(1 for v in row_vals if int_re.search(str(v)))
+                candidate_num_scores.append((r, score))
+            row_jeux = max(candidate_num_scores, key=lambda x: x[1])[0] if candidate_num_scores else min(row_jours + 1, nrows-1)
+
+            if row_jours < nrows and row_jeux < nrows:
+                jours_series = raw.iloc[row_jours].ffill().fillna("Séance inconnue").astype(str).str.strip()
+                jeux_series = raw.iloc[row_jeux].astype(str).fillna("").str.strip()
+
+                # Lecture des joueurs/gardiens
+                for r in range(row_jeux + 1, nrows):
+                    if r >= len(raw):
                         continue
-                    all_records.append({
-                        "Mois": str(sheet),
-                        "Joueur": joueur_name,
-                        "Seance": jour_name,
-                        "Jour_index": jour_index,
-                        "Semaine": semaine,
-                        "Jeu": int(jeu_num),
-                        "Resultat": val_str,
-                        "Victoire": 1 if val_str=="V" else 0,
-                        "Défaite": 1 if val_str=="D" else 0,
-                        "Postes": poste,
-                        "Buts_encaisses": np.nan
-                    })
-                else:
-                    try:
-                        buts = float(raw_val)
-                    except:
-                        buts = np.nan
-                    all_records.append({
-                        "Mois": str(sheet),
-                        "Joueur": joueur_name,
-                        "Seance": jour_name,
-                        "Jour_index": jour_index,
-                        "Semaine": semaine,
-                        "Jeu": int(jeu_num),
-                        "Resultat": np.nan,
-                        "Victoire": np.nan,
-                        "Défaite": np.nan,
-                        "Postes": poste,
-                        "Buts_encaisses": buts
-                    })
+                        
+                    joueur_cell = raw.iat[r, 0] if ncols > 0 else None
+                    poste_cell = raw.iat[r, 1] if ncols > 1 else None
+                    
+                    if pd.isna(joueur_cell) or str(joueur_cell).strip() == "":
+                        continue
+                    
+                    joueur_name = str(joueur_cell).strip()
+                    poste = str(poste_cell).strip() if not pd.isna(poste_cell) else "Joueur"
+                    
+                    for c in range(2, ncols):
+                        if c >= len(raw.columns):
+                            continue
+                            
+                        raw_val = raw.iat[r, c]
+                        if pd.isna(raw_val) or str(raw_val).strip() == "":
+                            continue
+                            
+                        jeu_cell = str(jeux_series.iloc[c]).strip() if c < len(jeux_series) else ""
+                        m = int_re.search(jeu_cell)
+                        jeu_num = int(m.group(1)) if m else c-1
+                        jour_name = str(jours_series.iloc[c]).strip() if c < len(jours_series) else "Séance inconnue"
+                        jour_index = day_names.get(jour_name.lower(), 0)
+                        semaine = (jour_index - 1)//7 + 1 if jour_index > 0 else 1
 
+                        if poste.lower() != "gardien":
+                            val_str = str(raw_val).strip().upper()
+                            if val_str not in ("V","D"):
+                                continue
+                            all_records.append({
+                                "Mois": str(sheet_name),
+                                "Joueur": joueur_name,
+                                "Seance": jour_name,
+                                "Jour_index": jour_index,
+                                "Semaine": semaine,
+                                "Jeu": int(jeu_num),
+                                "Resultat": val_str,
+                                "Victoire": 1 if val_str=="V" else 0,
+                                "Défaite": 1 if val_str=="D" else 0,
+                                "Postes": poste,
+                                "Buts_encaisses": np.nan
+                            })
+                        else:
+                            try:
+                                buts = float(raw_val)
+                            except:
+                                buts = np.nan
+                            all_records.append({
+                                "Mois": str(sheet_name),
+                                "Joueur": joueur_name,
+                                "Seance": jour_name,
+                                "Jour_index": jour_index,
+                                "Semaine": semaine,
+                                "Jeu": int(jeu_num),
+                                "Resultat": np.nan,
+                                "Victoire": np.nan,
+                                "Défaite": np.nan,
+                                "Postes": poste,
+                                "Buts_encaisses": buts
+                            })
+                            
+        except Exception as e:
+            st.error(f"Erreur lecture feuille {sheet_name}: {str(e)}")
+            continue
+    
     df = pd.DataFrame(all_records, columns=["Mois","Joueur","Seance","Jour_index","Semaine","Jeu","Resultat","Victoire","Défaite","Postes","Buts_encaisses"])
     if not df.empty:
         df["Jeu"] = df["Jeu"].astype(int)
@@ -114,15 +149,14 @@ def parse_excel_file(file_path):
         df["Postes"] = df["Postes"].str.strip().str.capitalize()
     return df
 
-# ---------------- Load Excel ----------------
-EXCEL_PATH = os.path.join(os.path.dirname(__file__), "Seances_V_D_2026.xlsx")
-if not os.path.exists(EXCEL_PATH):
-    st.error(f"Le fichier Excel '{EXCEL_PATH}' est introuvable.")
-    st.stop()
-
-df = parse_excel_file(EXCEL_PATH)
-if df.empty:
-    st.error("Aucune donnée extraite du fichier. Vérifie le format.")
+# ---------------- Load data ----------------
+try:
+    df = parse_google_sheet()
+    if df.empty:
+        st.error("Aucune donnée trouvée dans le Google Sheet. Vérifiez que les données sont bien saisies.")
+        st.stop()
+except Exception as e:
+    st.error(f"Erreur lors de la lecture du Google Sheet : {str(e)}")
     st.stop()
 
 df["SessionID"] = df["Mois"].astype(str) + " - " + df["Seance"].astype(str)
