@@ -25,7 +25,7 @@ def parse_google_sheet():
     int_re = re.compile(r'(\d+)')
     day_names = {"lundi":1,"mardi":2,"mercredi":3,"jeudi":4,"vendredi":5,"samedi":6,"dimanche":7}
     
-    # Lire toutes les feuilles disponibles avec leurs GIDs
+    # Lire toutes les feuilles - celles sans données seront automatiquement ignorées
     sheets = [
         ("Août", 0),
         ("Septembre", 1815364140),
@@ -85,6 +85,18 @@ def parse_google_sheet():
                     
                     joueur_name = str(joueur_cell).strip()
                     poste = str(poste_cell).strip() if not pd.isna(poste_cell) else "Joueur"
+                for r in range(row_jeux + 1, nrows):
+                    if r >= len(raw):
+                        continue
+                        
+                    joueur_cell = raw.iat[r, 0] if ncols > 0 else None
+                    poste_cell = raw.iat[r, 1] if ncols > 1 else None
+                    
+                    if pd.isna(joueur_cell) or str(joueur_cell).strip() == "":
+                        continue
+                    
+                    joueur_name = str(joueur_cell).strip()
+                    poste = str(poste_cell).strip() if not pd.isna(poste_cell) else "Joueur"
                     
                     for c in range(2, ncols):
                         if c >= len(raw.columns):
@@ -99,12 +111,29 @@ def parse_google_sheet():
                         jeu_num = int(m.group(1)) if m else c-1
                         jour_name = str(jours_series.iloc[c]).strip() if c < len(jours_series) else "Séance inconnue"
                         jour_index = day_names.get(jour_name.lower(), 0)
-                        semaine = (jour_index - 1)//7 + 1 if jour_index > 0 else 1
+                        
+                        # Calcul de semaine amélioré
+                        # Pour chaque jour, on regarde la colonne pour déterminer la semaine
+                        if jour_index > 0:
+                            # Calcul basé sur la position de la colonne
+                            if c <= 7:  # Colonnes C à I (première semaine)
+                                semaine = 1
+                            elif c <= 13:  # Colonnes J à P (deuxième semaine)  
+                                semaine = 2
+                            elif c <= 19:  # Colonnes Q à W (troisième semaine)
+                                semaine = 3
+                            else:  # Colonnes suivantes
+                                semaine = 4
+                        else:
+                            semaine = 1
 
                         if poste.lower() != "gardien":
                             val_str = str(raw_val).strip().upper()
-                            if val_str not in ("V","D"):
+                            
+                            if val_str not in ("V","D","N"):  # Ajouter "N" pour match nul
                                 continue
+                            
+                            # Créer l'enregistrement avec les nouvelles variables
                             all_records.append({
                                 "Mois": str(sheet_name),
                                 "Joueur": joueur_name,
@@ -115,6 +144,7 @@ def parse_google_sheet():
                                 "Resultat": val_str,
                                 "Victoire": 1 if val_str=="V" else 0,
                                 "Défaite": 1 if val_str=="D" else 0,
+                                "Nul": 1 if val_str=="N" else 0,  # Nouvelle colonne pour les nuls
                                 "Postes": poste,
                                 "Buts_encaisses": np.nan
                             })
@@ -133,6 +163,7 @@ def parse_google_sheet():
                                 "Resultat": np.nan,
                                 "Victoire": np.nan,
                                 "Défaite": np.nan,
+                                "Nul": np.nan,  # Ajouter aussi pour les gardiens
                                 "Postes": poste,
                                 "Buts_encaisses": buts
                             })
@@ -141,7 +172,7 @@ def parse_google_sheet():
             st.error(f"Erreur lecture feuille {sheet_name}: {str(e)}")
             continue
     
-    df = pd.DataFrame(all_records, columns=["Mois","Joueur","Seance","Jour_index","Semaine","Jeu","Resultat","Victoire","Défaite","Postes","Buts_encaisses"])
+    df = pd.DataFrame(all_records, columns=["Mois","Joueur","Seance","Jour_index","Semaine","Jeu","Resultat","Victoire","Défaite","Nul","Postes","Buts_encaisses"])
     if not df.empty:
         df["Jeu"] = df["Jeu"].astype(int)
         df["Seance"] = df["Seance"].fillna("Séance inconnue").astype(str)
@@ -195,18 +226,19 @@ if page == "Classement":
     if df_cl.empty:
         st.warning("Aucune donnée pour les filtres choisis.")
     else:
-        ranking = df_cl.groupby("Joueur", as_index=False).agg({"Victoire":"sum","Défaite":"sum"})
-        ranking["Total"] = ranking["Victoire"] + ranking["Défaite"]
+        ranking = df_cl.groupby("Joueur", as_index=False).agg({"Victoire":"sum","Défaite":"sum","Nul":"sum"})
+        ranking["Total"] = ranking["Victoire"] + ranking["Défaite"]  # Les nuls ne comptent pas dans le total pour le %
         ranking["% Victoire"] = (ranking["Victoire"]/ranking["Total"]).fillna(0)
         
         # Conversion en entiers pour le formatage
         ranking["Victoire"] = ranking["Victoire"].astype(int)
         ranking["Défaite"] = ranking["Défaite"].astype(int)
+        ranking["Nul"] = ranking["Nul"].astype(int)
         ranking["Total"] = ranking["Total"].astype(int)
         
         ranking = ranking.sort_values("% Victoire", ascending=False).reset_index(drop=True)
         ranking.insert(0, "Position", range(1,len(ranking)+1))
-        st.dataframe(ranking.style.format({"% Victoire":"{:.2%}","Victoire":"{:d}","Défaite":"{:d}","Total":"{:d}"}), use_container_width=True)
+        st.dataframe(ranking.style.format({"% Victoire":"{:.2%}","Victoire":"{:d}","Défaite":"{:d}","Nul":"{:d}","Total":"{:d}"}), use_container_width=True)
 
     st.markdown("---")
 
