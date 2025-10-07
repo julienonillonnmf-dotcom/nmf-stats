@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import altair as alt
+from itertools import combinations
 
 st.set_page_config(page_title="NMF — Suivi", layout="wide")
 
@@ -73,18 +74,6 @@ def parse_google_sheet():
                 jeux_series = raw.iloc[row_jeux].astype(str).fillna("").str.strip()
 
                 # Lecture des joueurs/gardiens
-                for r in range(row_jeux + 1, nrows):
-                    if r >= len(raw):
-                        continue
-                        
-                    joueur_cell = raw.iat[r, 0] if ncols > 0 else None
-                    poste_cell = raw.iat[r, 1] if ncols > 1 else None
-                    
-                    if pd.isna(joueur_cell) or str(joueur_cell).strip() == "":
-                        continue
-                    
-                    joueur_name = str(joueur_cell).strip()
-                    poste = str(poste_cell).strip() if not pd.isna(poste_cell) else "Joueur"
                 for r in range(row_jeux + 1, nrows):
                     if r >= len(raw):
                         continue
@@ -438,6 +427,129 @@ elif page == "Joueurs":
             ).interactive()
         )
         st.altair_chart(chart4, use_container_width=True)
+
+    st.markdown("---")
+
+    # ---------------- Graphique 5 - NOUVEAU : Associations de joueurs ----------------
+    st.subheader("Graphique 5 — 🤝 Meilleures associations de joueurs")
+    st.info("Cette analyse identifie les paires de joueurs qui jouent ensemble et calcule leur taux de victoire commun.")
+    
+    mois_sel_g5 = st.multiselect("Mois (G5)", months_all, default=months_all, key="mois_g5")
+    semaine_sel_g5 = st.multiselect("Semaine (G5)", semaines_all, default=semaines_all, key="semaine_g5")
+    jeu_range_g5 = st.slider("Plage de jeux (G5)", min_value=jeux_min, max_value=jeux_max, value=(jeux_min, jeux_max), key="jeu_g5")
+    
+    # Nombre minimum de jeux ensemble pour être considéré
+    min_jeux_ensemble = st.slider("Nombre minimum de jeux joués ensemble", min_value=1, max_value=20, value=5, key="min_jeux_g5")
+
+    mask_g5 = (
+        (df["Postes"] != "Gardien") &
+        (df["Mois"].isin(mois_sel_g5)) &
+        (df["Semaine"].isin(semaine_sel_g5)) &
+        (df["Jeu"].between(jeu_range_g5[0], jeu_range_g5[1]))
+    )
+    df_g5 = df.loc[mask_g5].copy()
+    
+    if not df_g5.empty:
+        # Créer un identifiant unique pour chaque jeu
+        df_g5["Match_ID"] = (df_g5["Mois"].astype(str) + "_" + 
+                             df_g5["Seance"].astype(str) + "_" + 
+                             df_g5["Semaine"].astype(str) + "_" + 
+                             df_g5["Jeu"].astype(str))
+        
+        # Pour chaque match, trouver les paires de joueurs
+        associations_data = []
+        
+        for match_id in df_g5["Match_ID"].unique():
+            match_data = df_g5[df_g5["Match_ID"] == match_id]
+            joueurs_du_match = match_data["Joueur"].unique()
+            
+            # Si au moins 2 joueurs ont joué ce match
+            if len(joueurs_du_match) >= 2:
+                # Obtenir le résultat (on prend le premier, ils devraient tous avoir le même résultat)
+                resultat = match_data["Resultat"].iloc[0]
+                victoire = match_data["Victoire"].iloc[0]
+                defaite = match_data["Défaite"].iloc[0]
+                
+                # Créer toutes les paires possibles
+                for paire in combinations(sorted(joueurs_du_match), 2):
+                    associations_data.append({
+                        "Joueur1": paire[0],
+                        "Joueur2": paire[1],
+                        "Paire": f"{paire[0]} & {paire[1]}",
+                        "Victoire": victoire,
+                        "Défaite": defaite,
+                        "Match_ID": match_id
+                    })
+        
+        if associations_data:
+            df_associations = pd.DataFrame(associations_data)
+            
+            # Agréger par paire
+            associations_agg = df_associations.groupby("Paire").agg({
+                "Victoire": "sum",
+                "Défaite": "sum",
+                "Match_ID": "count"
+            }).reset_index()
+            
+            associations_agg.columns = ["Paire", "Victoires", "Défaites", "Nb_jeux"]
+            
+            # Filtrer selon le nombre minimum de jeux
+            associations_agg = associations_agg[associations_agg["Nb_jeux"] >= min_jeux_ensemble]
+            
+            if not associations_agg.empty:
+                # Calculer le pourcentage de victoire
+                associations_agg["Total"] = associations_agg["Victoires"] + associations_agg["Défaites"]
+                associations_agg["% Victoire"] = (associations_agg["Victoires"] / associations_agg["Total"]).fillna(0)
+                
+                # Trier par % de victoire décroissant
+                associations_agg = associations_agg.sort_values("% Victoire", ascending=False).reset_index(drop=True)
+                associations_agg.insert(0, "Rang", range(1, len(associations_agg) + 1))
+                
+                # Afficher le tableau
+                st.dataframe(
+                    associations_agg.style.format({
+                        "% Victoire": "{:.2%}",
+                        "Victoires": "{:d}",
+                        "Défaites": "{:d}",
+                        "Nb_jeux": "{:d}",
+                        "Total": "{:d}"
+                    }),
+                    use_container_width=True
+                )
+                
+                # Graphique des meilleures paires (top 10)
+                top_paires = associations_agg.head(10)
+                
+                chart_g5 = (
+                    alt.Chart(top_paires)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("% Victoire:Q", title="% de victoires", axis=alt.Axis(format="%")),
+                        y=alt.Y("Paire:N", sort="-x", title="Paire de joueurs"),
+                        color=alt.Color("% Victoire:Q", scale=alt.Scale(scheme="greens"), legend=None),
+                        tooltip=["Paire", "% Victoire", "Victoires", "Défaites", "Nb_jeux"]
+                    )
+                ).properties(height=400)
+                
+                st.altair_chart(chart_g5, use_container_width=True)
+                
+                # Statistiques supplémentaires
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Nombre de paires analysées", len(associations_agg))
+                with col2:
+                    meilleure_paire = associations_agg.iloc[0]
+                    st.metric("Meilleure paire", meilleure_paire["Paire"], f"{meilleure_paire['% Victoire']:.1%}")
+                with col3:
+                    paire_la_plus_active = associations_agg.loc[associations_agg["Nb_jeux"].idxmax()]
+                    st.metric("Paire la plus active", paire_la_plus_active["Paire"], f"{int(paire_la_plus_active['Nb_jeux'])} jeux")
+                
+            else:
+                st.warning(f"Aucune paire n'a joué ensemble au moins {min_jeux_ensemble} fois avec les filtres sélectionnés.")
+        else:
+            st.warning("Aucune association de joueurs trouvée pour les filtres sélectionnés.")
+    else:
+        st.warning("Aucune donnée disponible pour les filtres sélectionnés.")
 
 # ---------------- Page Gardiens ----------------
 elif page == "Gardiens":
