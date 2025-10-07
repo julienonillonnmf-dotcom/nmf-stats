@@ -506,14 +506,12 @@ elif page == "Joueurs":
                 associations_agg.insert(0, "Rang", range(1, len(associations_agg) + 1))
                 
                 # Afficher le tableau
+                # Préparer le DataFrame pour l'affichage avec formatage
+                associations_display = associations_agg.copy()
+                associations_display["% Victoire"] = associations_display["% Victoire"].apply(lambda x: f"{x:.2%}")
+                
                 st.dataframe(
-                    associations_agg.style.format({
-                        "% Victoire": "{:.2%}",
-                        "Victoires": "{:d}",
-                        "Défaites": "{:d}",
-                        "Nb_jeux": "{:d}",
-                        "Total": "{:d}"
-                    }),
+                    associations_display,
                     use_container_width=True
                 )
                 
